@@ -1,0 +1,233 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Tracker Perjalanan</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+<style>
+*{margin:0;padding:0;box-sizing:border-box;font-family:Arial,sans-serif}
+body{background:linear-gradient(135deg,#1e3c72,#2a5298);padding:20px}
+.card{max-width:700px;margin:auto;background:#fff;border-radius:20px;padding:20px}
+h1{text-align:center;margin-bottom:15px;color:#2a5298}
+.box{background:#f4f6fa;padding:12px;border-radius:12px;margin-bottom:10px}
+.value{font-size:22px;font-weight:bold}
+#map{height:350px;border-radius:12px;margin:15px 0}
+.buttons{display:flex;gap:8px;flex-wrap:wrap}
+button{padding:10px 14px;border:none;border-radius:10px;color:#fff;font-weight:bold;cursor:pointer}
+.start{background:#28a745}.stop{background:#dc3545}.reset{background:#007bff}.zoom{background:#6f42c1}
+.routeBtn{background:#fd7e14;width:100%;margin-top:5px}
+#routesList{margin-top:15px}
+.routeItem{background:#eef2ff;padding:10px;border-radius:10px;margin-top:8px}
+</style>
+</head>
+<body>
+<div class="card">
+<h1>📍 Tracker Perjalanan</h1>
+
+<div class="box"><small>Jarak Tempuh</small><div class="value" id="distance">0.00 KM</div></div>
+<div class="box"><small>Kecepatan Saat Ini</small><div class="value" id="speed">0.0 KM/J</div></div>
+<div class="box"><small>Kecepatan Maksimum</small><div class="value" id="maxSpeed">0.0 KM/J</div></div>
+<div class="box"><small>Waktu Bergerak</small><div class="value" id="timer">00:00:00</div></div>
+
+<div id="map"></div>
+
+<div class="buttons">
+<button class="start" onclick="startTracking()">Mulai</button>
+<button class="stop" onclick="stopTracking()">Stop & Simpan</button>
+<button class="reset" onclick="resetData()">Reset</button>
+<button class="zoom" onclick="lihatSemuaRute()">Lihat Seluruh Rute</button>
+</div>
+
+<div id="routesList"></div>
+</div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+let watchId=null,tracking=false,totalDistance=0,lastPosition=null,path=[];
+let movingSeconds=0,isMoving=false,maxSpeed=0;
+
+const map=L.map('map').setView([-7.39,109.36],13);
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{attribution:'© OpenStreetMap'}).addTo(map);
+
+let marker=null;
+let currentRoute=L.polyline([], {weight:5}).addTo(map);
+
+function formatTime(sec){
+ const h=Math.floor(sec/3600);
+ const m=Math.floor((sec%3600)/60);
+ const s=sec%60;
+ return String(h).padStart(2,'0')+':'+String(m).padStart(2,'0')+':'+String(s).padStart(2,'0');
+}
+
+setInterval(()=>{
+ if(isMoving){
+  movingSeconds++;
+  document.getElementById("timer").textContent=formatTime(movingSeconds);
+ }
+},1000);
+
+function haversine(lat1,lon1,lat2,lon2){
+ const R=6371;
+ const dLat=(lat2-lat1)*Math.PI/180;
+ const dLon=(lon2-lon1)*Math.PI/180;
+ const a=Math.sin(dLat/2)**2+Math.cos(lat1*Math.PI/180)*Math.cos(lat2*Math.PI/180)*Math.sin(dLon/2)**2;
+ return R*(2*Math.atan2(Math.sqrt(a),Math.sqrt(1-a)));
+}
+
+navigator.geolocation?.getCurrentPosition(pos=>{
+ const lat=pos.coords.latitude;
+ const lon=pos.coords.longitude;
+ map.setView([lat,lon],16);
+ marker=L.marker([lat,lon]).addTo(map);
+});
+
+function startTracking(){
+ if(tracking)return;
+ tracking=true;
+
+ watchId=navigator.geolocation.watchPosition(pos=>{
+
+  const lat=pos.coords.latitude;
+  const lon=pos.coords.longitude;
+
+  let speed=(pos.coords.speed||0)*3.6;
+  document.getElementById('speed').textContent=speed.toFixed(1)+' KM/J';
+
+  if(speed>maxSpeed){
+   maxSpeed=speed;
+   document.getElementById('maxSpeed').textContent=maxSpeed.toFixed(1)+' KM/J';
+  }
+
+  isMoving=speed>3;
+
+  if(lastPosition){
+   const d=haversine(lastPosition.lat,lastPosition.lon,lat,lon);
+   if(d>0.01){
+    totalDistance+=d;
+    document.getElementById('distance').textContent=totalDistance.toFixed(2)+' KM';
+   }
+  }
+
+  lastPosition={lat,lon};
+  path.push([lat,lon]);
+
+  if(marker) marker.setLatLng([lat,lon]);
+  else marker=L.marker([lat,lon]).addTo(map);
+
+  currentRoute.setLatLngs(path);
+  map.panTo([lat,lon]);
+
+ },console.error,{enableHighAccuracy:true,maximumAge:0});
+}
+
+function stopTracking(){
+ if(watchId) navigator.geolocation.clearWatch(watchId);
+ tracking=false;
+ isMoving=false;
+
+ if(path.length>1){
+  const routes=JSON.parse(localStorage.getItem("routes")||"[]");
+
+  routes.push({
+   name:"Rute "+(routes.length+1),
+   date:new Date().toLocaleString(),
+   path:path,
+   distance: totalDistance,
+   maxSpeed: maxSpeed,
+   duration: movingSeconds
+  });
+
+  localStorage.setItem("routes",JSON.stringify(routes));
+ }
+
+ tampilkanRiwayat();
+}
+
+function tampilkanRiwayat(){
+ const routes=JSON.parse(localStorage.getItem("routes")||"[]");
+ const list=document.getElementById("routesList");
+
+ list.innerHTML="<h3>📚 Riwayat Rute</h3>";
+
+ routes.forEach((r,index)=>{
+  list.innerHTML+=`
+   <div class="routeItem">
+   <b>${r.name || "Tanpa Nama"}</b><br>
+   <small>${r.date}</small><br>
+
+   <button class="routeBtn" onclick="lihatRute(${index})">Lihat Rute</button>
+
+   <button class="routeBtn" style="background:#6f42c1"
+   onclick="editNama(${index})">Edit Nama</button>
+
+   <button class="routeBtn" style="background:red"
+   onclick="hapusRute(${index})">Hapus</button>
+
+   </div>
+  `;
+ });
+}
+
+function editNama(index){
+ let routes = JSON.parse(localStorage.getItem("routes")||"[]");
+
+ let namaBaru = prompt("Masukkan nama rute:", routes[index].name || "");
+
+ if(namaBaru && namaBaru.trim()!==""){
+  routes[index].name = namaBaru;
+  localStorage.setItem("routes", JSON.stringify(routes));
+  tampilkanRiwayat();
+ }
+}
+
+function hapusRute(index){
+ let routes = JSON.parse(localStorage.getItem("routes")||"[]");
+
+ if(confirm("Hapus rute ini?")){
+  routes.splice(index,1);
+  localStorage.setItem("routes", JSON.stringify(routes));
+  tampilkanRiwayat();
+ }
+}
+
+function lihatRute(index){
+ const routes=JSON.parse(localStorage.getItem("routes")||"[]");
+ const r=routes[index];
+ if(!r)return;
+
+ currentRoute.setLatLngs(r.path);
+ map.fitBounds(currentRoute.getBounds());
+
+ // 🔥 tampilkan statistik rute
+ document.getElementById('distance').textContent = (r.distance || 0).toFixed(2)+' KM';
+ document.getElementById('maxSpeed').textContent = (r.maxSpeed || 0).toFixed(1)+' KM/J';
+ document.getElementById('timer').textContent = formatTime(r.duration || 0);
+ document.getElementById('speed').textContent = '0.0 KM/J';
+}
+
+function lihatSemuaRute(){
+ if(path.length>0){
+  map.fitBounds(currentRoute.getBounds());
+ }
+}
+
+function resetData(){
+ totalDistance=0;
+ lastPosition=null;
+ path=[];
+ movingSeconds=0;
+ maxSpeed=0;
+
+ currentRoute.setLatLngs([]);
+
+ document.getElementById('distance').textContent='0.00 KM';
+ document.getElementById('speed').textContent='0.0 KM/J';
+ document.getElementById('maxSpeed').textContent='0.0 KM/J';
+ document.getElementById('timer').textContent='00:00:00';
+}
+
+tampilkanRiwayat();
+</script>
+</body>
+</html>
